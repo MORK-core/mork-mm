@@ -1,14 +1,18 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#![no_std]
+extern crate alloc;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use alloc::string::String;
+use log::info;
+use mork_common::types::ResultWithErr;
+use mork_hal::mm::PageTableImpl;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+pub mod page_table;
+mod heap;
+
+pub fn init(kernel_page_table: &mut PageTableImpl) -> ResultWithErr<String> {
+    info!("start mm init");
+    heap::init();
+    page_table::map_kernel_window(kernel_page_table)?;
+    kernel_page_table.active();
+    Ok(())
 }
