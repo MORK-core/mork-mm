@@ -3,8 +3,9 @@ use alloc::format;
 use alloc::string::String;
 use mork_common::types::ResultWithErr;
 use mork_common::utils::alignas::is_aligned;
-use log::warn;
+use mork_common::mork_kernel_log;
 use mork_hal::config::HAL_PAGE_LEVEL;
+use mork_hal::KERNEL_OFFSET;
 use mork_hal::mm::PageTableImpl;
 
 pub struct MutPageTableWrapper<'a> {
@@ -31,7 +32,8 @@ impl<'a> MutPageTableWrapper<'a> {
         if !is_aligned(vaddr, aligned_size) || !is_aligned(paddr, aligned_size) {
             return Err(format!("Kernel map vaddr must aligned for the first level, vaddr: {}, {}", vaddr, paddr));
         }
-        self.page_table.map_frame_for_kernel(vaddr, paddr, 0);
+        let mask = (1usize << 39) - 1;
+        self.page_table.map_frame_for_kernel(vaddr & mask, paddr, 0);
         Ok(aligned_size)
     }
 
@@ -44,6 +46,8 @@ impl<'a> MutPageTableWrapper<'a> {
         match self.search_for_insert(vaddr)? {
             (SearchResult::Missing(level), page_table) => {
                 if level == HAL_PAGE_LEVEL - 1 {
+                    mork_kernel_log!(debug, "map_normal_frame, paddr: {:#x}, vaddr: {:#x}, \
+                        is_x: {}, is_w: {}, is_r: {}", paddr, vaddr, is_x, is_w, is_r);
                     page_table
                         .map_frame_for_user(
                             vaddr,
@@ -53,10 +57,11 @@ impl<'a> MutPageTableWrapper<'a> {
                         );
                 } else {
                     let inner_page_table = Box::leak(Box::new(PageTableImpl::new()));
+                    mork_kernel_log!(debug, "inner_page_table_ptr: {:#x}", inner_page_table.get_ptr());
                     page_table
                         .map_page_table(
                             vaddr,
-                            inner_page_table.get_ptr(),
+                            inner_page_table.get_ptr() - KERNEL_OFFSET,
                             level,
                         );
                     let mut wrapper = Self {
@@ -67,7 +72,7 @@ impl<'a> MutPageTableWrapper<'a> {
                 }
             }
             _ => {
-                warn!("vaddr {:#x} has been mapped", vaddr);
+                mork_kernel_log!(warn, "vaddr {:#x} has been mapped", vaddr);
             }
         }
         Ok(())
@@ -110,7 +115,7 @@ pub fn map_kernel_window(kernel_page_table: &mut PageTableImpl) -> ResultWithErr
     // ROOT_PAGE_TABLE.map()
     let mut start = 0;
     while start < end {
-        start += wrapper.map_kernel(start, start)?;
+        start += wrapper.map_kernel(start + KERNEL_OFFSET, start)?;
     }
     *kernel_page_table = local_kernel_page_table;
     Ok(())
