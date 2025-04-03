@@ -6,7 +6,7 @@ use buddy_system_allocator::Heap;
 use spin::mutex::Mutex;
 
 
-const HEAP_SIZE: usize = 1 << 20;
+const HEAP_SIZE: usize = 1 << 24;
 const ORDER: usize = 32;
 
 static HEAP_MEM: [u64; HEAP_SIZE / 8] = [0u64; HEAP_SIZE / 8];
