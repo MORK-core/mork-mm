@@ -8,7 +8,8 @@ use mork_common::mork_kernel_log;
 use mork_common::syscall::message_info::ResponseLabel;
 use mork_hal::config::HAL_PAGE_LEVEL;
 use mork_hal::KERNEL_OFFSET;
-use mork_hal::mm::PageTableImpl;
+use mork_hal::mm::{PageTableEntryImpl, PageTableImpl};
+use crate::page_table::SearchResult::{Found, Missing};
 
 #[repr(C, align(4096))]
 #[derive(Clone, Copy)]
@@ -36,10 +37,9 @@ pub struct MutPageTableWrapper<'a> {
     level: usize,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum SearchResult {
-    Found(usize),
-    Missing(usize),
+pub enum SearchResult<'a> {
+    Found(usize, &'a mut PageTable),
+    Missing(usize, &'a mut PageTable),
 }
 
 impl<'a> MutPageTableWrapper<'a> {
@@ -60,19 +60,19 @@ impl<'a> MutPageTableWrapper<'a> {
         Ok(aligned_size)
     }
 
-    pub fn map_page_table(&mut self, vaddr: usize, paddr: usize) -> ResultWithErr<ResponseLabel> {
+    pub fn map_page_table(&mut self, vaddr: usize, paddr: usize) -> Result<usize, ResponseLabel> {
         if !is_aligned(vaddr, 4096) || !is_aligned(paddr, 4096) {
-            mork_kernel_log!(warn, "vaddr/addr vaddr must be aligned, {:#x}, {:#x}", vaddr, paddr);
+            mork_kernel_log!(warn, "vaddr/paddr must be aligned, {:#x}, {:#x}", vaddr, paddr);
             return Err(ResponseLabel::InvalidParam);
         }
-        match self.search_for_insert(vaddr).unwrap() {
-            (SearchResult::Missing(level), page_table) => {
+        match self.search_for_modify(vaddr, HAL_PAGE_LEVEL) {
+            Missing(level, page_table) => {
                 if level == HAL_PAGE_LEVEL - 1 {
                     mork_kernel_log!(warn, "page table has been mapped, {:#x}, {:#x}", vaddr, paddr);
                     Err(ResponseLabel::MappedAlready)
                 } else {
                     page_table.page_table_impl.map_page_table(vaddr, paddr - KERNEL_OFFSET, level);
-                    Ok(())
+                    Ok(level + 1)
                 }
             }
             _ => {
@@ -85,11 +85,11 @@ impl<'a> MutPageTableWrapper<'a> {
     pub fn map_frame(&mut self, vaddr: usize, paddr: usize, is_x: bool, is_w: bool, is_r: bool)
         -> ResultWithErr<ResponseLabel> {
         if !is_aligned(vaddr, 4096) || !is_aligned(paddr, 4096) {
-            mork_kernel_log!(warn, "vaddr/addr vaddr must be aligned, {:#x}, {:#x}", vaddr, paddr);
+            mork_kernel_log!(warn, "vaddr/paddr must be aligned, {:#x}, {:#x}", vaddr, paddr);
             return Err(ResponseLabel::InvalidParam);
         }
-        match self.search_for_insert(vaddr).unwrap() {
-            (SearchResult::Missing(level), page_table) => {
+        match self.search_for_modify(vaddr, HAL_PAGE_LEVEL) {
+            Missing(level, page_table) => {
                 if level == HAL_PAGE_LEVEL - 1 {
                     page_table
                         .page_table_impl
@@ -112,14 +112,58 @@ impl<'a> MutPageTableWrapper<'a> {
         }
     }
 
+    pub fn unmap_frame(&mut self, vaddr: usize) -> ResultWithErr<ResponseLabel> {
+        if !is_aligned(vaddr, 4096) {
+            mork_kernel_log!(warn, "vaddr must be aligned, {:#x}", vaddr);
+            return Err(ResponseLabel::InvalidParam);
+        }
+        match self.search_for_modify(vaddr, HAL_PAGE_LEVEL) {
+            Found(level, page_table) => {
+                mork_kernel_log!(debug, "found frame in level {} page table, vaddr: {:#x}",
+                    level, vaddr);
+                page_table.page_table_impl.unmap_frame(vaddr, level);
+                Ok(())
+            }
+            Missing(level, _) => {
+                mork_kernel_log!(warn, "fail to lookup vaddr {:#x}, level: {}", vaddr, level);
+                Err(ResponseLabel::InvalidParam)
+            }
+        }
+    }
+
+    pub fn unmap_page_table(&mut self, vaddr: usize, paddr: usize, level: usize) -> ResultWithErr<ResponseLabel> {
+        if !is_aligned(vaddr, 4096) {
+            mork_kernel_log!(warn, "vaddr must be aligned, {:#x}", vaddr);
+            return Err(ResponseLabel::InvalidParam);
+        }
+        match self.search_for_modify(vaddr, level - 1)  {
+            Found(_, _) => {
+                mork_kernel_log!(warn, "mapped frame founded, unmap frame first, vaddr: {:#x}", vaddr);
+                Err(ResponseLabel::MappedAlready)
+            }
+            Missing(level_inner, page_table) => {
+                let index = PageTableImpl::get_index(vaddr, level_inner).unwrap();
+                let pte = page_table.page_table_impl[index];
+                unsafe {
+                    if pte.get_page_table().get_ptr() != paddr {
+                        mork_kernel_log!(warn, "page table not matched, target paddr: {:#x}, get paddr: {:#x}",
+                            paddr, pte.get_page_table().get_ptr());
+                        return Err(ResponseLabel::InvalidParam);
+                    }
+                    page_table.page_table_impl[index] = PageTableEntryImpl::default();
+                    Ok(())
+                }
+            }
+        }
+    }
     pub fn map_root_task_frame(&mut self, vaddr: usize, paddr: usize, is_x: bool, is_w: bool, is_r: bool)
         -> ResultWithErr<String> {
         if !is_aligned(vaddr, 4096) || !is_aligned(paddr, 4096) {
-            return Err(format!("vaddr/addr vaddr must be aligned, {:#x}, {:#x}", vaddr, paddr).into());
+            return Err(format!("vaddr/paddr must be aligned, {:#x}, {:#x}", vaddr, paddr).into());
         }
 
-        match self.search_for_insert(vaddr)? {
-            (SearchResult::Missing(level), page_table) => {
+        match self.search_for_modify(vaddr, HAL_PAGE_LEVEL) {
+            Missing(level, page_table) => {
                 if level == HAL_PAGE_LEVEL - 1 {
                     // mork_kernel_log!(debug, "map_root_task_frame, paddr: {:#x}, vaddr: {:#x}, \
                     //     is_x: {}, is_w: {}, is_r: {}", paddr, vaddr, is_x, is_w, is_r);
@@ -155,26 +199,28 @@ impl<'a> MutPageTableWrapper<'a> {
         Ok(())
     }
 
-    fn search_for_insert(&mut self, vaddr: usize) -> Result<(SearchResult, &mut PageTable), String> {
+    fn search_for_modify(&mut self, vaddr: usize, max_level: usize) -> SearchResult {
         let mut current_level = self.level;
         let mut current_pt: &mut PageTable = &mut *self.page_table;
 
         loop {
-            if current_level >= HAL_PAGE_LEVEL {
-                return Err(format!("Exceed max level {}", HAL_PAGE_LEVEL));
+            if current_level >= max_level {
+                // return Err(format!("Exceed max level {}", HAL_PAGE_LEVEL));
+                mork_kernel_log!(warn, "Exceed max level: {}", max_level);
+                return Missing(current_level, current_pt);
             }
 
             let index = PageTableImpl::get_index(vaddr, current_level)
-                .ok_or("Invalid page table index")?;
+                .expect("Invalid page table index");
 
             let pte = &mut current_pt.page_table_impl[index]; // 可变借用
 
             if !pte.valid() {
-                return Ok((SearchResult::Missing(current_level), current_pt));
+                return Missing(current_level, current_pt);
             }
 
             if pte.is_leaf() {
-                return Ok((SearchResult::Found(current_level), current_pt));
+                return Found(current_level, current_pt);
             }
 
             // 进入下一级时需要转移所有权
