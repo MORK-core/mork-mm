@@ -4,18 +4,16 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::NonNull;
 use buddy_system_allocator::Heap;
 use spin::mutex::Mutex;
+use mork_common::mork_kernel_log;
 
-
-const HEAP_SIZE: usize = 1 << 24;
 const ORDER: usize = 32;
-
-static HEAP_MEM: [u64; HEAP_SIZE / 8] = [0u64; HEAP_SIZE / 8];
 
 static HEAP: Mutex<Heap<ORDER>> = Mutex::new(Heap::empty());
 
-pub fn init() {
+pub fn init(free_mem_start: usize, free_mem_end: usize) {
+    mork_kernel_log!(debug, "start: {:#x}, end: {:#x}", free_mem_start, free_mem_end);
     unsafe {
-        HEAP.lock().init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE);
+        HEAP.lock().init(free_mem_start, free_mem_end - free_mem_start);
     }
 }
 

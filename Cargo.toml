@@ -8,6 +8,7 @@ edition = "2024"
 [dependencies]
 mork-hal = { path = "../mork-hal" }
 mork-common = { path = "../../mork-common" }
+mork-capability = { path = "../mork-capability" }
 log = "0.4"
 lazy_init = { git = "https://github.com/Starry-OS/lazy_init.git" }
 buddy_system_allocator = "0.11"
