@@ -25,7 +25,7 @@ impl PageTable {
     pub fn get_ptr(&self) -> usize {
         self as *const _ as usize
     }
-    pub fn from_cap(cap: &PageTableCap) -> &mut Self {
+    pub fn from_cap(cap: &PageTableCap) -> & mut Self {
         unsafe {
             &mut *((cap.base_ptr() << 12) as usize as *mut Self)
         }
