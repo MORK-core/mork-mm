@@ -82,15 +82,16 @@ impl<'a> MutPageTableWrapper<'a> {
         }
     }
 
-    pub fn map_frame(&mut self, vaddr: usize, paddr: usize, is_x: bool, is_w: bool, is_r: bool)
+    pub fn map_frame(&mut self, vaddr: usize, paddr: usize, frame_level: usize, is_x: bool, is_w: bool, is_r: bool)
         -> ResultWithErr<ResponseLabel> {
-        if !is_aligned(vaddr, 4096) || !is_aligned(paddr, 4096) {
+        let align = PageTableImpl::get_align(frame_level).unwrap();
+        if !is_aligned(vaddr, align) || !is_aligned(paddr, align) {
             mork_kernel_log!(warn, "vaddr/paddr must be aligned, {:#x}, {:#x}", vaddr, paddr);
             return Err(ResponseLabel::InvalidParam);
         }
         match self.search_for_modify(vaddr, HAL_PAGE_LEVEL) {
             Missing(level, page_table) => {
-                if level == HAL_PAGE_LEVEL - 1 {
+                if level == frame_level - 1 {
                     page_table
                         .page_table_impl
                         .map_frame_for_user(
