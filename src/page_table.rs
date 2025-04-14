@@ -234,15 +234,13 @@ impl<'a> MutPageTableWrapper<'a> {
     }
 }
 
-pub fn map_kernel_window(kernel_page_table: &mut PageTable) -> ResultWithErr<String> {
-    let mut local_kernel_page_table = PageTable::new();
-    let mut wrapper = MutPageTableWrapper::new(&mut local_kernel_page_table);
+pub fn map_kernel_window(mut kernel_page_table: &mut PageTable) -> ResultWithErr<String> {
+    let mut wrapper = MutPageTableWrapper::new(&mut kernel_page_table);
     let (_, _, end) = mork_hal::get_memory_info().map_err(|()| "failed to get memory info")?;
-    // ROOT_PAGE_TABLE.map()
     let mut start = KERNEL_OFFSET;
+
     while start < end {
         start += wrapper.map_kernel(start, start)?;
     }
-    *kernel_page_table = local_kernel_page_table;
     Ok(())
 }
