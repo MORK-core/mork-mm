@@ -6,7 +6,7 @@ use mork_common::types::ResultWithErr;
 use mork_common::utils::alignas::is_aligned;
 use mork_common::mork_kernel_log;
 use mork_common::syscall::message_info::ResponseLabel;
-use mork_hal::config::HAL_PAGE_LEVEL;
+use mork_hal::config::{HAL_PAGE_LEVEL, PAGE_SIZE_NORMAL};
 use mork_hal::KERNEL_OFFSET;
 use mork_hal::mm::{PageTableEntryImpl, PageTableImpl};
 use crate::page_table::SearchResult::{Found, Missing};
@@ -40,6 +40,10 @@ pub struct MutPageTableWrapper<'a> {
 pub enum SearchResult<'a> {
     Found(usize, &'a mut PageTable),
     Missing(usize, &'a mut PageTable),
+}
+
+pub struct PageTableWrapper <'a> {
+    page_table: &'a PageTable,
 }
 
 impl<'a> MutPageTableWrapper<'a> {
@@ -227,6 +231,47 @@ impl<'a> MutPageTableWrapper<'a> {
             // 进入下一级时需要转移所有权
             let next_pt = unsafe {
                 &mut *(pte.get_page_table().get_ptr() as *mut PageTable)
+            };
+            current_pt = next_pt;
+            current_level += 1;
+        }
+    }
+}
+
+impl<'a> PageTableWrapper<'a> {
+    pub fn new(root: &'a PageTable) -> Self {
+        Self {
+            page_table: root,
+        }
+    }
+
+    pub fn va_to_pa(&self, vaddr: usize) -> Option<usize>{
+        let offset = vaddr & PAGE_SIZE_NORMAL;
+        let mut current_level = 0;
+        let mut current_pt: &PageTable = & *self.page_table;
+        loop {
+            if current_level >= HAL_PAGE_LEVEL {
+                // return Err(format!("Exceed max level {}", HAL_PAGE_LEVEL));
+                mork_kernel_log!(warn, "Exceed max level: {}", HAL_PAGE_LEVEL);
+                return None;
+            }
+
+            let index = PageTableImpl::get_index(vaddr, current_level)
+                .expect("Invalid page table index");
+
+            let pte = &current_pt.page_table_impl[index]; // 可变借用
+
+            if !pte.valid() {
+                return None;
+            }
+
+            if pte.is_leaf() {
+                return Some((pte.get_ppn() << 12) + offset + KERNEL_OFFSET);
+            }
+
+            // 进入下一级时需要转移所有权
+            let next_pt = unsafe {
+                & *(pte.get_page_table().get_ptr() as *mut PageTable)
             };
             current_pt = next_pt;
             current_level += 1;
