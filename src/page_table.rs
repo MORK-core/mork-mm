@@ -204,7 +204,7 @@ impl<'a> MutPageTableWrapper<'a> {
         Ok(())
     }
 
-    fn search_for_modify(&mut self, vaddr: usize, max_level: usize) -> SearchResult {
+    fn search_for_modify(&mut self, vaddr: usize, max_level: usize) -> SearchResult<'_> {
         let mut current_level = self.level;
         let mut current_pt: &mut PageTable = &mut *self.page_table;
 
